@@ -1,0 +1,209 @@
+from __future__ import annotations
+
+from typing import Any
+
+
+def default_config() -> dict[str, Any]:
+    """Default input simulasi.
+
+    Nilai awal mengikuti struktur defaultConfig pada file MATLAB HWST AC.
+    Beberapa parameter U manual lama tetap disimpan sebagai fallback internal,
+    tetapi UI utama lebih fokus pada parameter fisik/desain.
+    """
+    return {
+        # AC & Refrigeran
+        "property_source": 2,
+        "calculation_method": 2,
+        "ac_capacity_pk": 2.0,
+        "cooling_capacity_per_PK_kW": 2.637,
+        "T_amb_C": 32.0,
+        "refrigerant": "R32",
+        "pressure_drop_model": 2,
+        "pressure_drop_feedback": 1,
+        "pressure_drop_roughness_mm": 0.0015,
+        "dsh_superheat_margin_C": 1.0,
+        # Kompresor
+        "compressor_power_kW": 1.45,
+        "P_suction_psig": 120.0,
+        "P_discharge_psig": 360.0,
+        "suction_superheat_nominal_K": 5.0,
+        "liquid_subcool_nominal_K": 3.0,
+        "T_comp_out_C": 78.0,
+        # HWST & Tangki
+        "tank_volume_L": 70.0,
+        "T_tank_initial_C": 27.0,
+        "T_setpoint_C": 50.0,
+        "hwst_tube_D_o_mm": 9.52,
+        "hwst_tube_D_i_mm": 8.30,
+        "hwst_coil_length_m": 6.0,
+        "k_tube_hwst_W_mK": 385.0,
+        "h_water_hwst_W_m2K": 550.0,
+        "Rf_hwst_m2K_W": 0.0,
+        "UA_loss_W_K": 0.0,
+        "dt_s": 60.0,
+        "max_time_h": 6.0,
+        # Kondensor
+        "cond_tube_D_o_mm": 9.52,
+        "cond_tube_D_i_mm": 8.30,
+        "cond_fin_length_mm": 700.0,
+        "cond_fin_height_mm": 460.0,
+        "cond_fin_thickness_mm": 0.12,
+        "cond_fin_pitch_mm": 1.6,
+        "cond_tube_holes_per_row": 16.0,
+        "cond_tube_rows": 2.0,
+        "cond_tube_row_pitch_mm": 21.0,
+        "cond_return_bend_factor": 1.05,
+        "cond_fin_efficiency": 0.75,
+        "k_tube_cond_W_mK": 385.0,
+        "h_air_cond_W_m2K": 120.0,
+        "Rf_cond_m2K_W": 0.0,
+        "cond_airflow_m3_s": 0.58,
+        "T_cond_air_in_C": 32.0,
+        # Ekspansi / Kapiler
+        "capillary_D_i_mm": 1.30,
+        "capillary_length_m": 1.50,
+        "capillary_coil_factor": 0.95,
+        "capillary_diagnostic_mode": 1,
+        "capillary_feedback": 1,
+        # Evaporator
+        "evap_tube_D_o_mm": 9.52,
+        "evap_tube_D_i_mm": 8.30,
+        "evap_fin_length_mm": 820.0,
+        "evap_fin_height_mm": 250.0,
+        "evap_fin_thickness_mm": 0.12,
+        "evap_fin_pitch_mm": 1.5,
+        "evap_tube_holes_per_row": 12.0,
+        "evap_tube_rows": 2.0,
+        "evap_tube_row_pitch_mm": 19.0,
+        "evap_return_bend_factor": 1.05,
+        "evap_fin_efficiency": 0.78,
+        "k_tube_evap_W_mK": 385.0,
+        "h_air_evap_W_m2K": 110.0,
+        "Rf_evap_m2K_W": 0.0,
+        "evap_airflow_m3_s": 0.25,
+        "T_evap_air_in_C": 27.0,
+        "SHR_manual": 0.70,
+        # Variasi Volume
+        "volume_var1_L": 60.0,
+        "volume_var2_L": 70.0,
+        "volume_var3_L": 80.0,
+    }
+
+
+INPUT_GROUPS = [
+    {
+        "id": "ac",
+        "title": "AC & Refrigeran",
+        "fields": [
+            ["refrigerant", "Refrigeran", "-", "Pilihan: R32, R410A, R22, R134a"],
+            ["property_source", "Sumber properti refrigeran", "1/2", "1=Excel, 2=CoolProp"],
+            ["calculation_method", "Metode perhitungan coil", "1/2", "1=Segmented UA-dT lama, 2=NTU-effectiveness berbasis zona"],
+            ["ac_capacity_pk", "Kapasitas AC", "PK", "Kapasitas nominal unit AC"],
+            ["cooling_capacity_per_PK_kW", "Cooling capacity per PK", "kW/PK", "Total Q nominal = PK x kW/PK"],
+            ["T_amb_C", "Suhu lingkungan", "°C", "Untuk rugi panas tangki"],
+            ["pressure_drop_model", "Model pressure drop", "0/2", "0=off, 2=estimasi per zona"],
+            ["pressure_drop_feedback", "Feedback pressure drop", "0/1", "1=mengubah tekanan efektif"],
+            ["pressure_drop_roughness_mm", "Roughness pipa", "mm", "Roughness tembaga halus"],
+            ["dsh_superheat_margin_C", "Margin superheat DSH murni", "°C", "Batas window DSH murni"],
+        ],
+    },
+    {
+        "id": "kompresor",
+        "title": "Kompresor",
+        "fields": [
+            ["compressor_power_kW", "Daya kompresor nominal", "kW", "Data nameplate unit"],
+            ["P_suction_psig", "Tekanan suction kerja", "psig", "Tekanan kerja simulasi"],
+            ["P_discharge_psig", "Tekanan discharge kerja", "psig", "Tekanan kerja simulasi"],
+            ["suction_superheat_nominal_K", "Superheat nominal suction", "K", "Acuan mdot nominal"],
+            ["liquid_subcool_nominal_K", "Subcool nominal liquid", "K", "Acuan mdot nominal"],
+            ["T_comp_out_C", "Suhu keluar kompresor", "°C", "Perkiraan temperatur discharge"],
+        ],
+    },
+    {
+        "id": "tank",
+        "title": "HWST & Tangki",
+        "fields": [
+            ["tank_volume_L", "Volume tangki utama", "L", "Volume air HWST"],
+            ["T_tank_initial_C", "Suhu awal air", "°C", "Kondisi awal mixed/lumped tank"],
+            ["T_setpoint_C", "Set point air panas", "°C", "Target suhu air tangki"],
+            ["hwst_tube_D_o_mm", "Diameter luar coil HWST", "mm", "Untuk area perpindahan panas"],
+            ["hwst_tube_D_i_mm", "Diameter dalam coil HWST", "mm", "Untuk Auto-U dan pressure drop"],
+            ["hwst_coil_length_m", "Panjang coil HWST", "m", "Panjang pipa di tangki"],
+            ["k_tube_hwst_W_mK", "Konduktivitas pipa HWST", "W/m.K", "Tembaga sekitar 385 W/m.K"],
+            ["h_water_hwst_W_m2K", "h sisi air tangki", "W/m².K", "Input efektif sisi air"],
+            ["Rf_hwst_m2K_W", "Rf fouling HWST", "m²K/W", "0 untuk coil bersih"],
+            ["UA_loss_W_K", "UA loss tangki", "W/K", "0 jika rugi panas diabaikan"],
+            ["dt_s", "Time step", "s", "Interval perhitungan"],
+            ["max_time_h", "Batas waktu maksimum", "jam", "Stop jika target gagal"],
+        ],
+    },
+    {
+        "id": "kondensor",
+        "title": "Kondensor",
+        "fields": [
+            ["cond_tube_D_o_mm", "Diameter luar tube", "mm", "Area dan Auto-U"],
+            ["cond_tube_D_i_mm", "Diameter dalam tube", "mm", "Auto-U dan pressure drop"],
+            ["cond_fin_length_mm", "Fin length / tube lurus", "mm", "Lebar coil"],
+            ["cond_fin_height_mm", "Tinggi fin", "mm", "Tinggi muka coil"],
+            ["cond_fin_thickness_mm", "Tebal fin", "mm", "Umumnya 0,10–0,15 mm"],
+            ["cond_fin_pitch_mm", "Fin pitch", "mm", "Jarak antar fin"],
+            ["cond_tube_holes_per_row", "Jumlah tube hole / row", "-", "Jumlah lubang tube per row"],
+            ["cond_tube_rows", "Jumlah row tube", "-", "Jumlah row kedalaman coil"],
+            ["cond_tube_row_pitch_mm", "Jarak antar row tube", "mm", "Jarak antar row"],
+            ["cond_return_bend_factor", "Faktor return bend", "-", "Memasukkan efek belokan"],
+            ["cond_fin_efficiency", "Efisiensi fin", "-", "0–1"],
+            ["k_tube_cond_W_mK", "Konduktivitas tube kondensor", "W/m.K", "Tembaga sekitar 385"],
+            ["h_air_cond_W_m2K", "h udara efektif kondensor", "W/m².K", "Input efektif sisi udara"],
+            ["Rf_cond_m2K_W", "Rf fouling kondensor", "m²K/W", "0 untuk coil bersih"],
+            ["cond_airflow_m3_s", "Debit udara kondensor", "m³/s", "Dari v_air x A_face"],
+            ["T_cond_air_in_C", "Suhu udara masuk kondensor", "°C", "Outdoor air"],
+        ],
+    },
+    {
+        "id": "ekspansi",
+        "title": "Ekspansi / Kapiler",
+        "fields": [
+            ["capillary_D_i_mm", "Diameter dalam kapiler", "mm", "Geometri kapiler aktual"],
+            ["capillary_length_m", "Panjang kapiler", "m", "Geometri kapiler aktual"],
+            ["capillary_coil_factor", "Faktor coil kapiler", "-", "Contoh 0,95"],
+            ["capillary_diagnostic_mode", "Mode diagnostik kapiler", "0/1", "1=estimasi mdot kapiler"],
+            ["capillary_feedback", "Feedback kapiler", "0/1", "1=mdot/tekanan efektif"],
+        ],
+    },
+    {
+        "id": "evaporator",
+        "title": "Evaporator",
+        "fields": [
+            ["evap_tube_D_o_mm", "Diameter luar tube", "mm", "Area dan Auto-U"],
+            ["evap_tube_D_i_mm", "Diameter dalam tube", "mm", "Auto-U dan pressure drop"],
+            ["evap_fin_length_mm", "Fin length / tube lurus", "mm", "Lebar coil"],
+            ["evap_fin_height_mm", "Tinggi fin", "mm", "Tinggi muka coil"],
+            ["evap_fin_thickness_mm", "Tebal fin", "mm", "Umumnya 0,10–0,15 mm"],
+            ["evap_fin_pitch_mm", "Fin pitch", "mm", "Jarak antar fin"],
+            ["evap_tube_holes_per_row", "Jumlah tube hole / row", "-", "Jumlah lubang tube per row"],
+            ["evap_tube_rows", "Jumlah row tube", "-", "Jumlah row kedalaman coil"],
+            ["evap_tube_row_pitch_mm", "Jarak antar row tube", "mm", "Jarak antar row"],
+            ["evap_return_bend_factor", "Faktor return bend", "-", "Memasukkan efek belokan"],
+            ["evap_fin_efficiency", "Efisiensi fin", "-", "0–1"],
+            ["k_tube_evap_W_mK", "Konduktivitas tube evaporator", "W/m.K", "Tembaga sekitar 385"],
+            ["h_air_evap_W_m2K", "h udara efektif evaporator", "W/m².K", "Input efektif sisi udara"],
+            ["Rf_evap_m2K_W", "Rf fouling evaporator", "m²K/W", "0 untuk coil bersih"],
+            ["evap_airflow_m3_s", "Debit udara evaporator", "m³/s", "Dari v_air x A_outlet"],
+            ["T_evap_air_in_C", "Suhu udara masuk evaporator", "°C", "Return air indoor"],
+            ["SHR_manual", "SHR manual evaporator", "0–1", "Qsens = SHR x Qevap"],
+        ],
+    },
+    {
+        "id": "volume",
+        "title": "Variasi Volume",
+        "fields": [
+            ["volume_var1_L", "Volume variasi 1", "L", "Skenario volume rendah"],
+            ["volume_var2_L", "Volume variasi 2", "L", "Skenario volume tengah"],
+            ["volume_var3_L", "Volume variasi 3", "L", "Skenario volume tinggi"],
+        ],
+    },
+]
+
+
+def default_inputs_response() -> dict[str, Any]:
+    return {"config": default_config(), "groups": INPUT_GROUPS}

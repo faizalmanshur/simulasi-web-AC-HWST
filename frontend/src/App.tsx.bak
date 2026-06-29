@@ -1,0 +1,617 @@
+import { useEffect, useMemo, useState } from 'react'
+
+type Config = Record<string, number | string>
+type FieldDef = [string, string, string, string]
+type InputGroup = { id: string; title: string; fields: FieldDef[] }
+type SummaryRow = { output: string; value: string | number | null; unit: string }
+type TimeRow = Record<string, number | string | boolean | null>
+type CoilUsageRow = {
+  komponen: string
+  zona: string
+  persentase_COP_best_DSH: number
+  persentase_akhir: number
+  t_COP_best_DSH_min: number
+  T_tank_COP_best_DSH_C: number
+  catatan: string
+}
+type PhPoint = { label: string; name: string; h_kJ_kg: number; P_kPa: number; T_C: number }
+type PhFrame = { time_min: number; points: PhPoint[] }
+type PhDome = { liquid: Array<{ h_kJ_kg: number; P_kPa: number; T_C: number }>; vapor: Array<{ h_kJ_kg: number; P_kPa: number; T_C: number }>; source: string }
+type SimulationResults = {
+  status: string
+  summary_values: Record<string, number | string | null>
+  summary_rows: SummaryRow[]
+  time_series: TimeRow[]
+  visualization_series?: TimeRow[]
+  ph_series?: PhFrame[]
+  ph_dome?: PhDome
+  coil_usage: CoilUsageRow[]
+  state_rows: Array<Record<string, string | number>>
+  geometry_rows: Array<Record<string, string | number>>
+  analysis_rows: Array<Record<string, string | number>>
+  volume_variation: Array<Record<string, string | number | null>>
+  config: Config
+}
+
+type Page = 'dashboard' | 'visualisasi' | 'ph'
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? `http://${window.location.hostname}:8000`
+const numberKeys = new Set<string>()
+
+function App() {
+  const [config, setConfig] = useState<Config>({})
+  const [groups, setGroups] = useState<InputGroup[]>([])
+  const [activeGroup, setActiveGroup] = useState<string>('ac')
+  const [results, setResults] = useState<SimulationResults | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState('Memuat input default...')
+  const [page, setPage] = useState<Page>('dashboard')
+
+  useEffect(() => {
+    async function fetchDefaults() {
+      try {
+        const response = await fetch(`${API_BASE}/api/default-inputs`)
+        if (!response.ok) throw new Error('Gagal mengambil input default dari backend')
+        const data = await response.json()
+        setConfig(data.config)
+        setGroups(data.groups)
+        data.groups.forEach((group: InputGroup) => {
+          group.fields.forEach(([key]) => {
+            if (typeof data.config[key] === 'number') numberKeys.add(key)
+          })
+        })
+        setActiveGroup(data.groups?.[0]?.id ?? 'ac')
+        setMessage('Backend aktif. Input default berhasil dimuat.')
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : 'Backend belum aktif')
+      }
+    }
+    fetchDefaults()
+  }, [])
+
+  const activeFields = useMemo(() => groups.find((group) => group.id === activeGroup)?.fields ?? [], [groups, activeGroup])
+
+  const handleChange = (key: string, value: string) => {
+    setConfig((prev) => ({ ...prev, [key]: numberKeys.has(key) ? Number(value) : value }))
+  }
+
+  const runSimulation = async () => {
+    setLoading(true)
+    setMessage('Simulasi sedang berjalan...')
+    try {
+      const response = await fetch(`${API_BASE}/api/run-simulation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || 'Simulasi gagal')
+      setResults(data)
+      setMessage('Simulasi selesai. Visualisasi dan diagram P-h sudah siap.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Simulasi gagal')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const resetInput = async () => {
+    setResults(null)
+    setMessage('Memuat ulang input default...')
+    const response = await fetch(`${API_BASE}/api/default-inputs`)
+    const data = await response.json()
+    setConfig(data.config)
+    setGroups(data.groups)
+    setMessage('Input berhasil di-reset.')
+  }
+
+  const downloadExport = async (type: 'excel' | 'pdf') => {
+    setMessage(`Membuat file ${type.toUpperCase()}...`)
+    try {
+      const endpoint = type === 'excel' ? 'export-excel' : 'export-pdf'
+      const response = await fetch(`${API_BASE}/api/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config, results }),
+      })
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.detail || 'Export gagal')
+      }
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = type === 'excel' ? 'laporan_simulasi_hwst.xlsx' : 'laporan_simulasi_hwst.pdf'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+      setMessage(`Export ${type.toUpperCase()} selesai.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Export gagal')
+    }
+  }
+
+  const summary = results?.summary_values ?? {}
+
+  return (
+    <main className="app-shell">
+      <section className="hero">
+        <div>
+          <p className="eyebrow">Dashboard Simulasi Berbasis Web</p>
+          <h1>Simulasi AC + Hot Water Storage Tank</h1>
+          <p className="hero-text">Model perhitungan fisika dengan CoolProp, Auto-U, zona coil, kapiler/pressure feedback, visualisasi sistem, dan diagram P-h bergerak.</p>
+          <nav className="page-nav">
+            <button className={page === 'dashboard' ? 'nav-active' : ''} onClick={() => setPage('dashboard')}>Dashboard</button>
+            <button className={page === 'visualisasi' ? 'nav-active' : ''} onClick={() => setPage('visualisasi')}>Visualisasi Sistem</button>
+            <button className={page === 'ph' ? 'nav-active' : ''} onClick={() => setPage('ph')}>Diagram P-h</button>
+          </nav>
+        </div>
+        <div className="status-box">
+          <span>Status</span>
+          <strong>{loading ? 'Running...' : results ? results.status : 'Standby'}</strong>
+          <small>{message}</small>
+        </div>
+      </section>
+
+      {page === 'dashboard' && (
+        <section className="layout">
+          <aside className="panel input-panel">
+            <div className="panel-title">
+              <h2>Input Simulasi</h2>
+              <p>Pilih kategori lalu ubah nilai parameter.</p>
+            </div>
+            <div className="tabs">
+              {groups.map((group) => (
+                <button key={group.id} className={activeGroup === group.id ? 'tab active' : 'tab'} onClick={() => setActiveGroup(group.id)}>{group.title}</button>
+              ))}
+            </div>
+            <div className="form-grid">
+              {activeFields.map(([key, label, unit, note]) => (
+                <label className="field" key={key}>
+                  <span>{label}</span>
+                  <div className="input-row">
+                    {key === 'refrigerant' ? (
+                      <select value={String(config[key] ?? '')} onChange={(e) => handleChange(key, e.target.value)}>
+                        <option value="R32">R32</option><option value="R410A">R410A</option><option value="R22">R22</option><option value="R134a">R134a</option>
+                      </select>
+                    ) : (
+                      <input type="number" step="any" value={String(config[key] ?? '')} onChange={(e) => handleChange(key, e.target.value)} />
+                    )}
+                    <em>{unit}</em>
+                  </div>
+                  <small>{note}</small>
+                </label>
+              ))}
+            </div>
+            <div className="action-row sticky-actions">
+              <button className="primary" onClick={runSimulation} disabled={loading || !groups.length}>{loading ? 'Menjalankan...' : 'Jalankan Simulasi'}</button>
+              <button className="secondary" onClick={resetInput} disabled={loading}>Reset Input</button>
+            </div>
+          </aside>
+
+          <section className="results-area">
+            <div className="summary-grid">
+              <SummaryCard label="Suhu Akhir Tangki" value={summary.finalTankMean_C} unit="°C" />
+              <SummaryCard label="Waktu Set Point" value={summary.reachTime_min ?? '-'} unit="menit" />
+              <SummaryCard label="COP AC Terbaik DSH" value={summary.bestCOP_AC_dsh} unit="-" />
+              <SummaryCard label="COP Useful Terintegrasi" value={summary.COP_useful_integrated} unit="-" />
+            </div>
+            <div className="panel chart-panel">
+              <div className="panel-title horizontal">
+                <div><h2>Grafik Simulasi</h2><p>Kurva utama hasil simulasi terhadap waktu.</p></div>
+                <div className="action-row">
+                  <button className="secondary" onClick={() => downloadExport('excel')} disabled={!results}>Export Excel</button>
+                  <button className="secondary" onClick={() => downloadExport('pdf')} disabled={!results}>Export PDF</button>
+                </div>
+              </div>
+              {results?.time_series?.length ? (
+                <div className="charts">
+                  <LineChart data={results.time_series} xKey="time_min" yKey="T_tank_mean_C" title="Suhu Air Tangki vs Waktu" yLabel="°C" />
+                  <LineChart data={results.time_series} xKey="time_min" yKey="COP_AC" title="COP AC vs Waktu" yLabel="COP" />
+                  <LineChart data={results.time_series} xKey="time_min" yKey="Q_HWST_kW" title="Q HWST vs Waktu" yLabel="kW" />
+                </div>
+              ) : <div className="empty-state">Klik <strong>Jalankan Simulasi</strong> untuk menampilkan grafik.</div>}
+            </div>
+            <CoilUsagePanel results={results} />
+            <DataTables results={results} />
+          </section>
+        </section>
+      )}
+
+      {page === 'visualisasi' && <SystemJourneyPage results={results} onRun={runSimulation} loading={loading} />}
+      {page === 'ph' && <PHDiagramPage results={results} onRun={runSimulation} loading={loading} />}
+    </main>
+  )
+}
+
+function SummaryCard({ label, value, unit }: { label: string; value: unknown; unit: string }) {
+  return <div className="summary-card"><span>{label}</span><strong>{value === undefined || value === null ? '-' : String(value)}</strong><small>{unit}</small></div>
+}
+
+function LineChart({ data, xKey, yKey, title, yLabel }: { data: TimeRow[]; xKey: string; yKey: string; title: string; yLabel: string }) {
+  const width = 520, height = 230, pad = 38
+  const values = data.map((item) => Number(item[yKey])).filter(Number.isFinite)
+  const xValues = data.map((item) => Number(item[xKey])).filter(Number.isFinite)
+  const yMin = Math.min(...values), yMax = Math.max(...values), xMin = Math.min(...xValues), xMax = Math.max(...xValues)
+  const points = data.map((item) => {
+    const x = Number(item[xKey]), y = Number(item[yKey])
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+    const sx = pad + ((x - xMin) / Math.max(xMax - xMin, 1e-9)) * (width - pad * 2)
+    const sy = height - pad - ((y - yMin) / Math.max(yMax - yMin, 1e-9)) * (height - pad * 2)
+    return `${sx},${sy}`
+  }).filter(Boolean).join(' ')
+  return <div className="chart-card"><div className="chart-header"><h3>{title}</h3><span>{yLabel}</span></div><svg viewBox={`0 0 ${width} ${height}`} role="img"><line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} /><line x1={pad} y1={pad} x2={pad} y2={height - pad} /><text x={pad} y={24}>{Number.isFinite(yMax) ? yMax.toFixed(2) : '-'}</text><text x={pad} y={height - 10}>{Number.isFinite(yMin) ? yMin.toFixed(2) : '-'}</text><text x={width - 96} y={height - 10}>t = {Number.isFinite(xMax) ? xMax.toFixed(0) : '-'} min</text><polyline points={points} /></svg></div>
+}
+
+function useTimeline(length: number) {
+  const [idx, setIdx] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [speed, setSpeed] = useState(1)
+  useEffect(() => setIdx(0), [length])
+  useEffect(() => {
+    if (!playing || length < 2) return
+    const timer = window.setInterval(() => setIdx((prev) => (prev >= length - 1 ? 0 : prev + 1)), Math.max(70, 420 / speed))
+    return () => window.clearInterval(timer)
+  }, [playing, speed, length])
+  return { idx: Math.min(idx, Math.max(length - 1, 0)), setIdx, playing, setPlaying, speed, setSpeed }
+}
+
+function TimelineControl({ idx, setIdx, length, playing, setPlaying, speed, setSpeed, time }: { idx: number; setIdx: (n: number) => void; length: number; playing: boolean; setPlaying: (b: boolean) => void; speed: number; setSpeed: (n: number) => void; time: number }) {
+  return <div className="timeline-control">
+    <div><span>Waktu simulasi</span><strong>{fmt(time, 2)} min</strong></div>
+    <input type="range" min={0} max={Math.max(length - 1, 0)} value={idx} onChange={(e) => setIdx(Number(e.target.value))} />
+    <div className="timeline-buttons">
+      <button className="secondary" onClick={() => setPlaying(!playing)}>{playing ? 'Pause' : 'Play'}</button>
+      {[0.5, 1, 2, 5].map((s) => <button key={s} className={speed === s ? 'speed active-speed' : 'speed'} onClick={() => setSpeed(s)}>{s}×</button>)}
+    </div>
+  </div>
+}
+
+
+function SystemJourneyPage({ results, onRun, loading }: { results: SimulationResults | null; onRun: () => void; loading: boolean }) {
+  const series = results?.visualization_series?.length ? results.visualization_series : results?.time_series ?? []
+  const { idx, setIdx, playing, setPlaying, speed, setSpeed } = useTimeline(series.length)
+  const row = series[idx]
+  if (!results || !series.length || !row) return <NeedRunPanel title="Visualisasi Perjalanan Sistem" onRun={onRun} loading={loading} />
+  return <section className="single-page visual-page-v9">
+    <div className="panel visual-panel visual-v9-panel">
+      <div className="panel-title horizontal visual-head-v9">
+        <div>
+          <h2>Visualisasi Simulasi Siklus Refrigeran</h2>
+          <p>Skema teknis yang dipadatkan: pipa dinamis, HWST horizontal, kapiler coil, metrik realtime, dan tren yang mengikuti timestep aktif.</p>
+        </div>
+        <Badge>timestep {idx + 1}/{series.length}</Badge>
+      </div>
+      <TimelineControl idx={idx} setIdx={setIdx} length={series.length} playing={playing} setPlaying={setPlaying} speed={speed} setSpeed={setSpeed} time={num(row.time_min)} />
+      <div className="visual-layout-v10">
+        <div className="visual-left-v10">
+          <SystemSvg row={row} />
+          <VisualTrendStrip series={series} activeIdx={idx} />
+        </div>
+        <RealtimePanel row={row} />
+      </div>
+    </div>
+  </section>
+}
+
+function SystemSvg({ row }: { row: TimeRow }) {
+  const tComp = num(row.T_comp_out_C), tHwst = num(row.T_ref_out_HWST_C), tCond = num(row.T_cond_out_C), tEvapIn = num(row.T_evap_in_C), tEvapOut = num(row.T_evap_out_C), tTank = num(row.T_tank_mean_C)
+  const qHwst = num(row.Q_HWST_kW), wComp = num(row.W_comp_kW)
+  const cComp = tempColor(tComp), cHwst = tempColor(tHwst), cCond = tempColor(tCond), cEvapIn = tempColor(tEvapIn), cEvapOut = tempColor(tEvapOut)
+  return <div className="system-card professional-system system-card-v9 system-card-v10"><svg viewBox="0 0 1040 500" className="system-svg system-svg-v9 system-svg-v10">
+    <defs>
+      <filter id="softShadowV9" x="-30%" y="-30%" width="160%" height="160%"><feDropShadow dx="0" dy="10" stdDeviation="9" floodColor="#0f172a" floodOpacity="0.13" /></filter>
+      <linearGradient id="tempScaleV9" x1="0" x2="1"><stop offset="0%" stopColor="#2563eb"/><stop offset="24%" stopColor="#06b6d4"/><stop offset="50%" stopColor="#22c55e"/><stop offset="74%" stopColor="#f59e0b"/><stop offset="100%" stopColor="#dc2626"/></linearGradient>
+      <linearGradient id="tankSteelV9" x1="0" x2="1"><stop offset="0%" stopColor="#e2e8f0"/><stop offset="18%" stopColor="#ffffff"/><stop offset="50%" stopColor="#f8fafc"/><stop offset="82%" stopColor="#e2e8f0"/><stop offset="100%" stopColor="#cbd5e1"/></linearGradient>
+      <linearGradient id="capCopper" x1="0" x2="1"><stop offset="0%" stopColor="#92400e"/><stop offset="45%" stopColor="#fbbf24"/><stop offset="100%" stopColor="#b45309"/></linearGradient>
+    </defs>
+    <rect x="14" y="14" width="1012" height="462" rx="28" className="svg-bg" />
+    <text x="520" y="46" textAnchor="middle" className="system-title">Diagram Teknis Siklus Refrigeran AC + HWST</text>
+    <text x="520" y="68" textAnchor="middle" className="component-caption">dash kecil menunjukkan arah aliran refrigeran; warna pipa mengikuti temperatur timestep aktif</text>
+
+    <Pipe d="M172 200 L172 122 L338 122 L338 156" color={cComp} label={`2  Keluar kompresor  ${fmt(tComp,1)}°C`} x={210} y={104} hot />
+    <Pipe d="M558 156 L665 156 L665 154 L790 154" color={cHwst} label={`2'  Keluar HWST  ${fmt(tHwst,1)}°C`} x={594} y={104} />
+    <Pipe d="M868 288 L868 350 L700 350 L700 380 L566 380" color={cCond} label={`3  Keluar kondensor  ${fmt(tCond,1)}°C`} x={705} y={334} />
+    <Pipe d="M674 380 L430 380 L392 342" color={cEvapIn} label={`4  Masuk evaporator  ${fmt(tEvapIn,1)}°C`} x={436} y={406} />
+    <Pipe d="M268 342 L122 342 L122 246" color={cEvapOut} label={`1  Keluar evaporator  ${fmt(tEvapOut,1)}°C`} x={62} y={323} />
+
+    <CompressorClean x={70} y={182} color={cComp} power={wComp} />
+    <HwstTankHorizontal x={320} y={82} color={cHwst} tankTemp={tTank} row={row} qHwst={qHwst} />
+    <CondenserClean x={790} y={124} row={row} />
+    <CapillaryClean x={566} y={352} />
+    <EvaporatorClean x={245} y={298} row={row} />
+    <g transform="translate(62,440)"><TemperatureLegend /></g>
+  </svg></div>
+}
+
+function Pipe({ d, color, label, x, y, hot = false }: { d: string; color: string; label: string; x: number; y: number; hot?: boolean }) {
+  const width = Math.min(248, Math.max(150, label.length * 6.3))
+  return <g className="pipe-layer pipe-v9">
+    <path d={d} stroke="#cbd5e1" strokeWidth="18" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity=".70" />
+    <path d={d} stroke="#ffffff" strokeWidth="14" fill="none" strokeLinecap="round" strokeLinejoin="round" opacity=".68" />
+    <path d={d} stroke={color} strokeWidth="10" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    <path d={d} className="flow-dash" stroke={hot ? 'rgba(255,255,255,.90)' : 'rgba(255,255,255,.78)'} strokeWidth="3" fill="none" strokeDasharray="3 19" strokeLinecap="round" />
+    <rect x={x-8} y={y-20} width={width} height="30" rx="9" fill="white" stroke="#dbe4ee" opacity=".96" />
+    <text x={x} y={y} className="state-label state-label-v9">{label}</text>
+  </g>
+}
+
+function CompressorClean({ x, y, color, power }: { x: number; y: number; color: string; power: number }) {
+  return <g transform={`translate(${x},${y})`} filter="url(#softShadowV9)">
+    <ellipse cx="72" cy="140" rx="60" ry="12" fill="#cbd5e1" opacity=".52" />
+    <path d="M32 44 Q32 18 72 18 Q112 18 112 44 L112 112 Q112 142 72 142 Q32 142 32 112 Z" fill="#ffffff" stroke="#1e293b" strokeWidth="2.3" />
+    <ellipse cx="72" cy="44" rx="40" ry="18" fill="#f1f5f9" stroke="#64748b" />
+    <path d="M43 61 Q72 46 101 61" fill="none" stroke={color} strokeWidth="7" opacity=".38" strokeLinecap="round" />
+    {[74,90,106,122].map(yv => <line key={yv} x1="40" y1={yv} x2="104" y2={yv} stroke="#dbe4ee" strokeWidth="2" />)}
+    <circle cx="72" cy="91" r="25" fill={color} opacity=".10" stroke={color} strokeWidth="1.2" />
+    <text x="72" y="93" textAnchor="middle" className="comp-label">COMP</text>
+    <text x="72" y="166" textAnchor="middle" className="component-caption">W = {fmt(power,2)} kW</text>
+  </g>
+}
+
+function HwstTankHorizontal({ x, y, color, tankTemp, row, qHwst }: { x: number; y: number; color: string; tankTemp: number; row: TimeRow; qHwst: number }) {
+  return <g transform={`translate(${x},${y})`} filter="url(#softShadowV9)">
+    <ellipse cx="128" cy="137" rx="132" ry="13" fill="#cbd5e1" opacity=".45" />
+    <rect x="20" y="28" width="216" height="92" rx="46" fill="url(#tankSteelV9)" stroke="#1e293b" strokeWidth="2.2" />
+    <ellipse cx="38" cy="74" rx="18" ry="43" fill="#f8fafc" stroke="#94a3b8" />
+    <ellipse cx="218" cy="74" rx="18" ry="43" fill="#e2e8f0" stroke="#94a3b8" />
+    <rect x="48" y="42" width="152" height="64" rx="22" fill={tempColor(tankTemp)} opacity=".10" />
+    <HwstCoil x={56} y={48} color={color} row={row} />
+    <line x1="58" y1="120" x2="58" y2="140" stroke="#64748b" strokeWidth="5" strokeLinecap="round" />
+    <line x1="198" y1="120" x2="198" y2="140" stroke="#64748b" strokeWidth="5" strokeLinecap="round" />
+    <circle cx="18" cy="74" r="5.8" fill={color} /><circle cx="238" cy="74" r="5.8" fill={color} />
+    <text x="128" y="161" textAnchor="middle" className="comp-label">HWST</text>
+    <text x="128" y="181" textAnchor="middle" className="small-svg">T air {fmt(tankTemp,1)}°C  |  Q {fmt(qHwst,2)} kW</text>
+  </g>
+}
+
+function HwstCoil({ x, y, color, row }: { x: number; y: number; color: string; row: TimeRow }) {
+  const dsh = pct(row.hwst_f_dsh), tp = pct(row.hwst_f_tp), sc = pct(row.hwst_f_sc)
+  const colors = ['#dc2626', '#f59e0b', '#22c55e']
+  return <g transform={`translate(${x},${y})`}>
+    {[0,1,2,3,4,5,6].map((i) => {
+      const zoneColor = i < Math.round(dsh/100*7) ? colors[0] : i < Math.round((dsh+tp)/100*7) ? colors[1] : colors[2]
+      const cx = i * 20
+      return <path key={i} d={`M${cx} 4 C${cx} 18 ${cx+16} 18 ${cx+16} 32 C${cx+16} 48 ${cx} 48 ${cx} 60`} fill="none" stroke={zoneColor || color} strokeWidth="4" strokeLinecap="round" />
+    })}
+  </g>
+}
+
+function CondenserClean({ x, y, row }: { x: number; y: number; row: TimeRow }) {
+  const dsh = pct(row.cond_f_dsh), tp = pct(row.cond_f_tp), sc = pct(row.cond_f_sc)
+  return <g transform={`translate(${x},${y})`} filter="url(#softShadowV9)">
+    <ellipse cx="78" cy="176" rx="78" ry="10" fill="#cbd5e1" opacity=".42" />
+    <rect x="0" y="0" width="156" height="164" rx="20" fill="#ffffff" stroke="#1e293b" strokeWidth="2.2" />
+    <rect x="14" y="18" width="128" height="112" rx="12" fill="#f8fafc" stroke="#cbd5e1" />
+    <FinLines x={24} y={22} w={108} h={104} count={9} />
+    <CondenserSerpentine x={22} y={28} w={112} row={row} />
+    <circle cx="0" cy="30" r="6" fill={tempColor(num(row.T_ref_out_HWST_C))} stroke="#fff" strokeWidth="2" />
+    <circle cx="78" cy="164" r="6" fill={tempColor(num(row.T_cond_out_C))} stroke="#fff" strokeWidth="2" />
+    <circle cx="78" cy="82" r="30" fill="none" stroke="#dbe4ee" strokeDasharray="6 6" />
+    <circle cx="78" cy="82" r="7" fill="#e2e8f0" stroke="#64748b" />
+    <text x="78" y="148" textAnchor="middle" className="comp-label">KONDENSOR</text>
+    <text x="78" y="181" textAnchor="middle" className="small-svg">DSH {fmt(dsh,1)}% · TP {fmt(tp,1)}% · SC {fmt(sc,1)}%</text>
+  </g>
+}
+
+function CondenserSerpentine({ x, y, w, row }: { x: number; y: number; w: number; row: TimeRow }) {
+  const dshRows = Math.round(pct(row.cond_f_dsh)/100*6)
+  const tpRows = Math.round(pct(row.cond_f_tp)/100*6)
+  return <g transform={`translate(${x},${y})`}>
+    {Array.from({length: 6}).map((_, i) => {
+      const cy = i*16
+      const col = i < dshRows ? '#dc2626' : i < dshRows + tpRows ? '#f59e0b' : '#22c55e'
+      return <path key={i} d={`M0 ${cy} C ${w*.25} ${cy-5} ${w*.75} ${cy+5} ${w} ${cy}`} fill="none" stroke={col} strokeWidth="4.6" strokeLinecap="round" />
+    })}
+    {Array.from({length: 5}).map((_, i) => <path key={`bend${i}`} d={`M${i%2===0?w:0} ${i*16} C ${i%2===0?w+14:-14} ${i*16+8} ${i%2===0?w+14:-14} ${i*16+8} ${i%2===0?w:0} ${i*16+16}`} fill="none" stroke="#94a3b8" strokeWidth="2" opacity=".55" />)}
+  </g>
+}
+
+function EvaporatorClean({ x, y, row }: { x: number; y: number; row: TimeRow }) {
+  return <g transform={`translate(${x},${y})`} filter="url(#softShadowV9)">
+    <rect x="0" y="0" width="168" height="112" rx="20" fill="#ffffff" stroke="#1e293b" strokeWidth="2.2" />
+    <FinLines x={18} y={15} w={132} h={72} count={10} />
+    <CoilHorizontal x={24} y={25} w={120} rows={5} row={row} type="evap" />
+    <text x="84" y="101" textAnchor="middle" className="comp-label">EVAPORATOR</text>
+  </g>
+}
+
+function CoilHorizontal({ x, y, w, rows, row, type }: { x: number; y: number; w: number; rows: number; color?: string; row: TimeRow; type: 'hwst'|'cond'|'evap' }) {
+  const tp = type === 'evap' ? pct(row.evap_f_tp) : pct(row.hwst_f_tp)
+  return <g transform={`translate(${x},${y})`}>{Array.from({length: rows}).map((_, i) => <path key={i} d={`M0 ${i*13} Q ${w/2} ${i*13-6} ${w} ${i*13}`} fill="none" stroke={i < rows*(tp/100) ? '#2563eb' : '#60a5fa'} strokeWidth="4" strokeLinecap="round" />)}</g>
+}
+
+function CoilVertical({ x, y, h, cols, row, type }: { x: number; y: number; h: number; cols: number; row: TimeRow; type: 'cond' }) {
+  const tp = pct(row.cond_f_tp), sc = pct(row.cond_f_sc)
+  return <g transform={`translate(${x},${y})`}>{Array.from({length: cols}).map((_, i) => <line key={i} x1={i*15} y1="0" x2={i*15} y2={h} stroke={i < cols*(tp/100) ? '#f59e0b' : '#22c55e'} strokeWidth="4" strokeLinecap="round" />)}</g>
+}
+
+function FinLines({ x, y, w, h, count }: { x: number; y: number; w: number; h: number; count: number }) {
+  return <g>{Array.from({ length: count }).map((_, i) => <line key={i} x1={x + i*w/(count-1)} y1={y} x2={x + i*w/(count-1)} y2={y+h} stroke="#cbd5e1" strokeWidth="1.1" />)}</g>
+}
+
+function CapillaryClean({ x, y }: { x: number; y: number }) {
+  return <g transform={`translate(${x},${y})`} filter="url(#softShadowV9)">
+    <line x1="-14" y1="28" x2="2" y2="28" stroke="url(#capCopper)" strokeWidth="8" strokeLinecap="round" />
+    <path d="M0 28 C10 6 26 6 36 28 C46 50 62 50 72 28 C82 6 98 6 108 28" fill="none" stroke="url(#capCopper)" strokeWidth="8" strokeLinecap="round" />
+    <line x1="108" y1="28" x2="124" y2="28" stroke="url(#capCopper)" strokeWidth="8" strokeLinecap="round" />
+    <path d="M0 28 C10 6 26 6 36 28 C46 50 62 50 72 28 C82 6 98 6 108 28" fill="none" stroke="rgba(255,255,255,.70)" strokeWidth="2.5" strokeDasharray="3 11" strokeLinecap="round" />
+    <circle cx="0" cy="28" r="5" fill="#b45309" stroke="#fff" strokeWidth="2" />
+    <circle cx="108" cy="28" r="5" fill="#b45309" stroke="#fff" strokeWidth="2" />
+    <rect x="28" y="45" width="52" height="21" rx="10" fill="#fff7ed" stroke="#fed7aa" />
+    <text x="54" y="60" textAnchor="middle" className="comp-label">KAPILER</text>
+  </g>
+}
+
+function TemperatureLegend() {
+  return <g><text x="0" y="0" className="component-caption">Skala temperatur (°C)</text><rect x="0" y="13" width="330" height="12" rx="6" fill="url(#tempScaleV9)" /><text x="0" y="43" className="small-svg">rendah</text><text x="292" y="43" className="small-svg">tinggi</text></g>
+}
+
+function RealtimePanel({ row }: { row: TimeRow }) {
+  const hwst = [['DSH', pct(row.hwst_f_dsh)], ['TP', pct(row.hwst_f_tp)], ['SC', pct(row.hwst_f_sc)]] as Array<[string, number]>
+  const cond = [['DSH', pct(row.cond_f_dsh)], ['TP', pct(row.cond_f_tp)], ['SC', pct(row.cond_f_sc)]] as Array<[string, number]>
+  const evap = [['TP', pct(row.evap_f_tp)], ['SH', pct(row.evap_f_sh)]] as Array<[string, number]>
+  return <div className="realtime-panel realtime-v9">
+    <div className="realtime-header"><h3>Metrik Realtime</h3><span>t = {fmt(num(row.time_min),2)} min</span></div>
+    <MetricGrid items={[
+      ['T Air Tangki', fmt(num(row.T_tank_mean_C),1), '°C'], ['COP AC', fmt(num(row.COP_AC),3), '-'],
+      ['COP Useful', fmt(num(row.COP_useful),3), '-'], ['Q HWST', fmt(num(row.Q_HWST_kW),3), 'kW'],
+      ['Daya Kompresor', fmt(num(row.W_comp_kW),3), 'kW'], ['Pressure drop', fmt(num(row.DP_high_side_kPa ?? row.DP_high_kPa ?? row.DP_total_high_kPa ?? 0),2), 'kPa'],
+      ['m dot ref', fmt(num(row.mdot_ref_kg_s),5), 'kg/s'], ['Status kapiler', capStatusLabel(row), '-']
+    ]} />
+    <div className="donut-zone-panel donut-v9-panel">
+      <div className="zone-panel-title"><strong>Distribusi Zona Coil</strong><small>berdasarkan timestep aktif</small></div>
+      <div className="donut-zone-grid donut-zone-grid-v9">
+        <ZoneDonut title="HWST" zones={hwst} />
+        <ZoneDonut title="Kondensor" zones={cond} />
+        <ZoneDonut title="Evaporator" zones={evap} />
+      </div>
+    </div>
+  </div>
+}
+
+function MetricGrid({ items }: { items: Array<[string, string, string]> }) { return <div className="metric-grid metric-grid-v9">{items.map(([label, value, unit]) => <div className="mini-card mini-card-v9" key={label}><span>{label}</span><strong>{value}</strong><em>{unit}</em></div>)}</div> }
+
+function ZoneDonut({ title, zones }: { title: string; zones: Array<[string, number]> }) {
+  const colorMap: Record<string,string> = { DSH:'#dc2626', TP:'#f59e0b', SC:'#22c55e', SH:'#60a5fa' }
+  let angle = 0
+  const active = zones.filter(([,v]) => v > 0.001)
+  const gradient = active.map(([z, v]) => { const start = angle; const end = angle + Math.max(0, v) * 3.6; angle = end; return `${colorMap[z] ?? '#64748b'} ${start}deg ${end}deg` }).join(', ')
+  return <div className="zone-donut-card zone-donut-card-v9">
+    <div className="mini-donut" style={{ background: `conic-gradient(${gradient || '#e2e8f0 0deg 360deg'})` }}><div><strong>{title}</strong><span>{fmt(zones.reduce((a, [,v]) => a+v, 0),0)}%</span></div></div>
+    <div className="mini-donut-legend mini-donut-legend-v9">{zones.map(([z,v]) => <span key={z}><i style={{background: colorMap[z] ?? '#64748b'}} /><b>{z}</b> {fmt(v,1)}%</span>)}</div>
+  </div>
+}
+
+function VisualTrendStrip({ series, activeIdx }: { series: TimeRow[]; activeIdx: number }) {
+  if (!series.length) return null
+  return <div className="visual-trends visual-trends-v9">
+    <div className="section-mini-title"><strong>Tren Simulasi</strong><span>legend menjelaskan titik/komponen; marker vertikal mengikuti timestep aktif</span></div>
+    <div className="visual-trend-grid visual-trend-grid-v9">
+      <MultiLineMiniChart title="Temperatur Titik" data={series} keys={['T_evap_out_C','T_comp_out_C','T_ref_out_HWST_C','T_cond_out_C','T_evap_in_C']} labels={['Titik 1 – Keluar evaporator','Titik 2 – Keluar kompresor',"Titik 2’ – Keluar HWST",'Titik 3 – Keluar kondensor','Titik 4 – Masuk evaporator']} activeIdx={activeIdx} />
+      <LineChartActive data={series} xKey="time_min" yKey="T_tank_mean_C" title="Suhu Air Tangki" yLabel="°C" activeIdx={activeIdx} />
+      <LineChartActive data={series} xKey="time_min" yKey="COP_AC" title="COP AC" yLabel="COP" activeIdx={activeIdx} />
+      <MultiLineMiniChart title="Zona Coil" data={series} keys={['hwst_f_dsh','cond_f_tp','cond_f_sc','evap_f_tp','evap_f_sh']} labels={['HWST DSH','Kondensor TP','Kondensor SC','Evaporator TP','Evaporator SH']} activeIdx={activeIdx} percent />
+    </div>
+  </div>
+}
+
+function LineChartActive({ data, xKey, yKey, title, yLabel, activeIdx }: { data: TimeRow[]; xKey: string; yKey: string; title: string; yLabel: string; activeIdx: number }) {
+  const values = data.map((row) => num(row[yKey])).filter(Number.isFinite)
+  if (!values.length) return <div className="chart-card">Tidak ada data</div>
+  const w = 520, h = 210, pad = 38
+  const minY = Math.min(...values), maxY = Math.max(...values), span = Math.max(maxY - minY, 1e-6)
+  const pts = data.map((row, i) => {
+    const x = pad + (i / Math.max(data.length - 1, 1)) * (w - 2 * pad)
+    const y = h - pad - ((num(row[yKey]) - minY) / span) * (h - 2 * pad)
+    return [x, y]
+  })
+  const p = pts.map(([x, y]) => `${x},${y}`).join(' ')
+  const active = pts[Math.min(Math.max(activeIdx, 0), pts.length - 1)] ?? [pad, h-pad]
+  const activeRow = data[Math.min(Math.max(activeIdx, 0), data.length - 1)] ?? {}
+  return <div className="chart-card chart-card-v9"><div className="chart-header"><h3>{title}</h3><span>{fmt(activeRow[yKey],2)} {yLabel}</span></div><svg viewBox={`0 0 ${w} ${h}`}><line x1={pad} y1={h-pad} x2={w-pad} y2={h-pad}/><line x1={pad} y1={pad} x2={pad} y2={h-pad}/><polyline points={p}/><line className="active-time-line" x1={active[0]} y1={pad-6} x2={active[0]} y2={h-pad} /><circle cx={active[0]} cy={active[1]} r="6" className="active-dot"/><text x={pad} y={pad-13}>{fmt(maxY,2)}</text><text x={w-pad-70} y={h-pad+26}>t={fmt(activeRow[xKey],1)} min</text></svg></div>
+}
+
+function MultiLineMiniChart({ data, keys, labels, title, activeIdx, percent = false }: { data: TimeRow[]; keys: string[]; labels: string[]; title: string; activeIdx: number; percent?: boolean }) {
+  const w = 520, h = 210, pad = 38
+  const rawValues = data.flatMap(row => keys.map(k => percent ? num(row[k])*100 : num(row[k]))).filter(Number.isFinite)
+  const minY = Math.min(...rawValues), maxY = Math.max(...rawValues), span = Math.max(maxY-minY, 1e-6)
+  const colors = ['#0891b2','#dc2626','#f59e0b','#22c55e','#2563eb','#9333ea']
+  const poly = (k: string) => data.map((row, i) => {
+    const v = percent ? num(row[k])*100 : num(row[k])
+    const x = pad + i / Math.max(data.length-1,1) * (w-2*pad)
+    const y = h - pad - (v-minY)/span * (h-2*pad)
+    return `${x},${y}`
+  }).join(' ')
+  const activeX = pad + Math.min(Math.max(activeIdx,0), data.length-1)/Math.max(data.length-1,1)*(w-2*pad)
+  const activeRow = data[Math.min(Math.max(activeIdx,0), data.length-1)] ?? {}
+  return <div className="chart-card chart-card-v9 multi-chart"><div className="chart-header"><h3>{title}</h3><span>t={fmt(activeRow.time_min,1)} min</span></div><svg viewBox={`0 0 ${w} ${h}`}><line x1={pad} y1={h-pad} x2={w-pad} y2={h-pad}/><line x1={pad} y1={pad} x2={pad} y2={h-pad}/>{keys.map((k,i) => <polyline key={k} points={poly(k)} style={{stroke: colors[i], fill:'none', strokeWidth:3}} />)}<line className="active-time-line" x1={activeX} y1={pad-6} x2={activeX} y2={h-pad} />{keys.map((k,i) => { const v = percent ? num(activeRow[k])*100 : num(activeRow[k]); const y = h - pad - (v-minY)/span * (h-2*pad); return <circle key={k+'dot'} cx={activeX} cy={y} r="4.5" fill={colors[i]} stroke="white" strokeWidth="2"/> })}<text x={pad} y={pad-13}>{fmt(maxY,1)}{percent?'%':''}</text></svg><div className="mini-legend">{labels.map((l,i) => <span key={l}><i style={{background:colors[i]}} />{l}</span>)}</div></div>
+}
+
+function capStatusLabel(row: TimeRow) {
+  const code = num(row.capillary_status_code ?? row.capillaryStatusCode ?? 0)
+  if (code === 5) return 'WITHIN_TOLERANCE'
+  if (code === 2) return 'UNDERFEED'
+  if (code === 3) return 'OVERFEED'
+  return String(row.capillary_status ?? row.capillaryStatus ?? 'Normal')
+}
+
+function PHDiagramPage({ results, onRun, loading }: { results: SimulationResults | null; onRun: () => void; loading: boolean }) {
+  const frames = results?.ph_series ?? []
+  const { idx, setIdx, playing, setPlaying, speed, setSpeed } = useTimeline(frames.length)
+  const frame = frames[idx]
+  if (!results || !frames.length || !frame) return <NeedRunPanel title="Diagram P-h Bergerak" onRun={onRun} loading={loading} />
+  return <section className="single-page"><div className="panel visual-panel"><div className="panel-title horizontal"><div><h2>Diagram P-h Bergerak</h2><p>Titik siklus bergerak mengikuti timestep: 1 → 2 → 2' → 3 → 4 → 1. Titik 2' adalah keluar HWST.</p></div><Badge>{results.ph_dome?.source ?? 'CoolProp'}</Badge></div><div className="ph-layout"><PHChart frame={frame} dome={results.ph_dome} /><PHStateTable frame={frame} /></div><TimelineControl idx={idx} setIdx={setIdx} length={frames.length} playing={playing} setPlaying={setPlaying} speed={speed} setSpeed={setSpeed} time={Number(frame.time_min)} /></div></section>
+}
+
+function PHChart({ frame, dome }: { frame: PhFrame; dome?: PhDome }) {
+  const w = 900, h = 540, padL = 78, padR = 36, padT = 46, padB = 64
+  const domeClosed = (dome?.liquid?.length && dome?.vapor?.length) ? [...dome.liquid, ...[...dome.vapor].reverse()] : []
+  const all = [...(dome?.liquid ?? []), ...(dome?.vapor ?? []), ...frame.points].filter((p) => Number.isFinite(Number(p.h_kJ_kg)) && Number.isFinite(Number(p.P_kPa)) && Number(p.P_kPa) > 0)
+  const hMin = Math.min(...all.map(p => Number(p.h_kJ_kg))) - 25, hMax = Math.max(...all.map(p => Number(p.h_kJ_kg))) + 35
+  const pMin = Math.max(100, Math.min(...all.map(p => Number(p.P_kPa))) * 0.70), pMax = Math.max(...all.map(p => Number(p.P_kPa))) * 1.35
+  const logMin = Math.log10(pMin), logMax = Math.log10(pMax)
+  const sx = (hv: number) => padL + ((hv - hMin) / Math.max(hMax - hMin, 1e-9)) * (w - padL - padR)
+  const sy = (pv: number) => h - padB - ((Math.log10(Math.max(pv, 1)) - logMin) / Math.max(logMax - logMin, 1e-9)) * (h - padT - padB)
+  const pth = (pts: Array<{h_kJ_kg:number;P_kPa:number}>) => pts.map(p => `${sx(p.h_kJ_kg)},${sy(p.P_kPa)}`).join(' ')
+  const cycle = [...frame.points, frame.points[0]]
+  const colors: Record<string, string> = { '1':'#0891b2', '2':'#dc2626', "2'":'#ea580c', '3':'#2563eb', '4':'#f59e0b' }
+  const offsets: Record<string, [number, number]> = { '1':[-86, 34], '2':[12, -36], "2'":[-110, -34], '3':[-4, -34], '4':[-82, 26] }
+  return <div className="ph-chart-wrap"><svg viewBox={`0 0 ${w} ${h}`} className="ph-svg">
+    <rect x="16" y="16" width={w-32} height={h-32} rx="24" fill="#fff" stroke="#e2e8f0" />
+    {[0,1,2,3,4].map(i => { const y = padT + i*(h-padT-padB)/4; const pVal = Math.pow(10, logMax - i*(logMax-logMin)/4); return <g key={i}><line x1={padL} y1={y} x2={w-padR} y2={y} stroke="#e2e8f0"/><text x="24" y={y+4} className="axis-text">{fmt(pVal,0)}</text></g> })}
+    {[0,1,2,3,4].map(i => { const x = padL + i*(w-padL-padR)/4; const hVal = hMin + i*(hMax-hMin)/4; return <g key={`x${i}`}><line x1={x} y1={padT} x2={x} y2={h-padB} stroke="#f1f5f9"/><text x={x-16} y={h-padB+24} className="axis-text">{fmt(hVal,0)}</text></g> })}
+    <line x1={padL} y1={padT} x2={padL} y2={h-padB} stroke="#94a3b8"/><line x1={padL} y1={h-padB} x2={w-padR} y2={h-padB} stroke="#94a3b8"/>
+    {domeClosed.length ? <polygon points={pth(domeClosed)} className="dome-fill" /> : null}
+    {dome?.liquid?.length ? <polyline points={pth(dome.liquid)} className="dome-line liquid" /> : null}
+    {dome?.vapor?.length ? <polyline points={pth(dome.vapor)} className="dome-line vapor" /> : null}
+    <polyline points={pth(cycle)} className="cycle-line" />
+    {frame.points.map((p) => { const [ox, oy] = offsets[p.label] ?? [14, -20]; const x=sx(p.h_kJ_kg), y=sy(p.P_kPa); const tx=x+ox, ty=y+oy; return <g key={p.label}>
+      <line x1={x} y1={y} x2={tx + (ox < 0 ? 72 : 0)} y2={ty+8} stroke="#94a3b8" strokeDasharray="4 4" />
+      <circle cx={x} cy={y} r="9" fill={colors[p.label] ?? '#334155'} stroke="#fff" strokeWidth="3"/>
+      <rect x={tx-6} y={ty-18} width="100" height="36" rx="9" fill="white" stroke="#cbd5e1" opacity=".96" />
+      <text x={tx} y={ty-2} className="point-label">{p.label}</text><text x={tx+28} y={ty-2} className="point-small">{fmt(p.T_C,1)}°C</text>
+      <text x={tx} y={ty+13} className="point-small">h={fmt(p.h_kJ_kg,1)}</text>
+    </g> })}
+    <text x={w/2} y={h-18} textAnchor="middle" className="axis-title">Entalpi, h (kJ/kg)</text>
+    <text transform={`translate(18 ${h/2}) rotate(-90)`} textAnchor="middle" className="axis-title">Tekanan, P (kPa abs, log)</text>
+    <text x={padL} y="32" className="system-title">t = {fmt(frame.time_min,2)} menit</text>
+    <text x={w-padR} y="32" textAnchor="end" className="component-caption">1 → 2 → 2' → 3 → 4 → 1</text>
+  </svg></div>
+}
+
+function PHStateTable({ frame }: { frame: PhFrame }) { return <div className="ph-state-panel"><h3>State titik P-h</h3><p>Label 2' menunjukkan refrigeran keluar HWST sebelum masuk kondensor.</p><table><thead><tr><th>Titik</th><th>Nama</th><th>h</th><th>P</th><th>T</th></tr></thead><tbody>{frame.points.map(p => <tr key={p.label}><td><strong>{p.label}</strong></td><td>{p.name}</td><td>{fmt(p.h_kJ_kg,2)}</td><td>{fmt(p.P_kPa,1)}</td><td>{fmt(p.T_C,1)}</td></tr>)}</tbody></table></div> }
+
+function NeedRunPanel({ title, onRun, loading }: { title: string; onRun: () => void; loading: boolean }) { return <section className="single-page"><div className="panel need-run"><h2>{title}</h2><p>Jalankan simulasi terlebih dahulu agar data time-series, titik state, dan diagram bergerak dapat ditampilkan.</p><button className="primary" onClick={onRun} disabled={loading}>{loading ? 'Menjalankan...' : 'Jalankan Simulasi'}</button></div></section> }
+function Badge({ children }: { children: any }) { return <span className="badge">{children}</span> }
+
+function CoilUsagePanel({ results }: { results: SimulationResults | null }) {
+  const rows = results?.coil_usage ?? [], summary = results?.summary_values ?? {}, groups = ['HWST', 'Kondensor', 'Evaporator']
+  return <div className="panel coil-panel"><div className="panel-title horizontal"><div><h2>Persentase Penggunaan Coil</h2><p>Zona refrigeran pada kondisi COP best DSH.</p></div>{results && <div className="coil-meta"><span>t = {String(summary.t_dsh_start_min ?? '-')}–{String(summary.t_dsh_end_min ?? '-')} min</span><strong>Best DSH: {String(summary.bestCOP_AC_dsh ?? '-')}</strong></div>}</div>{!rows.length ? <div className="empty-state">Persentase coil akan muncul setelah simulasi dijalankan.</div> : <div className="coil-grid">{groups.map((group) => <CoilDonut key={group} title={group} rows={rows.filter((row) => row.komponen === group)} />)}</div>}</div>
+}
+
+function CoilDonut({ title, rows }: { title: string; rows: CoilUsageRow[] }) {
+  const activeRows = rows.filter((row) => Number(row.persentase_COP_best_DSH) > 0.0001)
+  let angle = 0
+  const colorMap: Record<string, string> = { DSH: '#dc2626', TP: '#f59e0b', SC: '#2563eb', SH: '#ef4444' }
+  const gradient = activeRows.map((row) => { const start = angle, end = angle + Number(row.persentase_COP_best_DSH) * 3.6; angle = end; return `${colorMap[row.zona] ?? '#64748b'} ${start}deg ${end}deg` }).join(', ')
+  return <div className="coil-card"><div className="donut-wrap"><div className="donut" style={{ background: `conic-gradient(${gradient || '#e2e8f0 0deg 360deg'})` }}><div className="donut-hole"><strong>{title}</strong><span>coil</span></div></div></div><div className="coil-legend">{rows.map((row) => <div className="legend-row" key={`${title}-${row.zona}`}><span className="legend-dot" style={{ background: colorMap[row.zona] ?? '#64748b' }} /><strong>{row.zona}</strong><em>{Number(row.persentase_COP_best_DSH).toFixed(2)}%</em><small>akhir: {Number(row.persentase_akhir).toFixed(2)}%</small></div>)}</div></div>
+}
+
+function DataTables({ results }: { results: SimulationResults | null }) {
+  if (!results) return <div className="panel"><h2>Data Hasil</h2><div className="empty-state">Belum ada data. Jalankan simulasi terlebih dahulu.</div></div>
+  return <div className="tables-grid"><TableCard title="Ringkasan" rows={results.summary_rows} /><TableCard title="Persentase Coil" rows={results.coil_usage} note="Nilai utama diambil pada kondisi COP best DSH; kolom akhir adalah kondisi saat simulasi selesai." /><TableCard title="State Refrigeran" rows={results.state_rows} /><TableCard title="Geometri" rows={results.geometry_rows} /><TableCard title="Variasi Volume" rows={results.volume_variation} /><TableCard title="Analisis" rows={results.analysis_rows} /><TableCard title="Data Waktu" rows={results.time_series.slice(0, 20)} note="Ditampilkan 20 baris pertama. Data lengkap ada di export Excel." /></div>
+}
+
+function TableCard({ title, rows, note }: { title: string; rows: Array<Record<string, unknown>>; note?: string }) {
+  const headers = rows.length ? Object.keys(rows[0]) : []
+  return <div className="panel table-card"><h2>{title}</h2>{note && <p className="note">{note}</p>}<div className="table-scroll"><table><thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead><tbody>{rows.map((row, idx) => <tr key={idx}>{headers.map((header) => <td key={header}>{String(row[header] ?? '-')}</td>)}</tr>)}</tbody></table></div></div>
+}
+
+function num(v: unknown, fallback = 0) { const n = Number(v); return Number.isFinite(n) ? n : fallback }
+function pct(v: unknown) { return Math.max(0, Math.min(100, num(v) * 100)) }
+function fmt(v: unknown, nd = 2) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(nd) : '-' }
+function tempColor(t: number) { const r = Math.max(0, Math.min(1, (t - 0) / 90)); const hue = 210 - r * 210; return `hsl(${hue} 78% 48%)` }
+
+export default App
